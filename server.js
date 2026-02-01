@@ -1,8 +1,6 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-
-// 🔥 Initialize Firebase ONCE before routes
 require("./firebase");
 
 const app = express();
@@ -10,7 +8,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check (Cloud Run needs this)
+// Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "Backend running OK" });
 });
