@@ -1,14 +1,14 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-require("./firebase");
+require("./firebase"); // 🔥 initializes Firebase safely
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Health check
+// Health check (Cloud Run NEEDS THIS)
 app.get("/api/health", (req, res) => {
   res.json({ status: "Backend running OK" });
 });
@@ -20,6 +20,7 @@ app.use("/api/products", require("./routes/products"));
 app.use("/api/bills", require("./routes/bills"));
 app.use("/api/returns", require("./routes/returns"));
 
+// 🚨 MUST use process.env.PORT
 const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
