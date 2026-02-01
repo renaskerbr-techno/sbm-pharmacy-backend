@@ -19,7 +19,8 @@ app.use("/api/products", require("./routes/products"));
 app.use("/api/bills", require("./routes/bills"));
 app.use("/api/returns", require("./routes/returns"));
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 8080;
+
 app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
