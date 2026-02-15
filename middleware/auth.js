@@ -1,37 +1,17 @@
-const { auth, db } = require("../firebase");
+const jwt = require("jsonwebtoken");
 
-async function verifyAuth(req, res, next) {
+module.exports = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) return res.status(401).json({ message: "No token" });
+
+  const token = authHeader.split(" ")[1];
+
   try {
-    const header = req.headers.authorization;
-
-    if (!header || !header.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "Unauthorized" });
-    }
-
-    const token = header.split(" ")[1];
-    const decoded = await auth.verifyIdToken(token);
-
-    const userDoc = await db.collection("users").doc(decoded.uid).get();
-
-    if (!userDoc.exists) {
-      return res.status(401).json({ message: "User not registered" });
-    }
-
-    const userData = userDoc.data();
-
-    if (!userData.isActive) {
-      return res.status(403).json({ message: "User inactive" });
-    }
-
-    req.user = {
-      uid: decoded.uid,
-      role: userData.role
-    };
-
+    const decoded = jwt.verify(token, "MY_SECRET_KEY");
+    req.user = decoded;
     next();
   } catch (err) {
-    return res.status(401).json({ message: "Unauthorized" });
+    return res.status(401).json({ message: "Invalid token" });
   }
-}
-
-module.exports = verifyAuth;
+};

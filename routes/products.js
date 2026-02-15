@@ -1,86 +1,164 @@
 const express = require("express");
-const router = express.Router();
-
 const verifyAuth = require("../middleware/auth");
 const { db } = require("../firebase");
+const PDFDocument = require("pdfkit");
 
-/**
- * CREATE PRODUCT (ADMIN ONLY)
- */
-router.post("/", verifyAuth, async (req, res) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Admin only" });
-  }
+const router = express.Router();
 
-  const {
-    name,
-    packing,
-    productType,
-    mrp,
-    salePrice,
-    ptr,
-    gstRate,
-    hsn
-  } = req.body;
+/* ================= GET ALL PRODUCTS ================= */
 
-  if (!name || !mrp) {
-    return res.status(400).json({ message: "Name & MRP required" });
-  }
-
-  const product = {
-    name,
-    packing: packing || "",
-    productType: productType || "",
-    mrp: Number(mrp),
-    salePrice: Number(salePrice || mrp),
-    ptr: Number(ptr || 0),
-    gstRate: Number(gstRate || 0),
-    hsn: hsn || "",
-    stock: 0,
-    isActive: true,
-    createdAt: new Date()
-  };
-
-  const ref = await db.collection("products").add(product);
-
-  res.json({
-    id: ref.id,
-    message: "Product created"
-  });
-});
-
-/**
- * LIST PRODUCTS (ALL LOGGED USERS)
- */
 router.get("/", verifyAuth, async (req, res) => {
-  const snapshot = await db
-    .collection("products")
-    .orderBy("createdAt", "desc")
-    .get();
+  try {
+    const snapshot = await db.collection("products")
+      .orderBy("createdAt", "desc")
+      .get();
 
-  const products = snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data()
-  }));
+    const products = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
 
-  res.json(products);
+    res.json(products);
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/**
- * ACTIVATE / DEACTIVATE PRODUCT (ADMIN ONLY)
- */
-router.patch("/:id/status", verifyAuth, async (req, res) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({ message: "Admin only" });
+/* ================= ADD PRODUCT ================= */
+
+router.post("/", verifyAuth, async (req, res) => {
+  try {
+
+    const productName = req.body.name?.trim();
+
+    if (!productName) {
+      return res.status(400).json({ message: "Product name is required" });
+    }
+
+    // 🔍 Check if product already exists
+    const snapshot = await db.collection("products")
+      .where("name", "==", productName)
+      .get();
+
+    const productData = {
+      name: productName,
+      mrp: Number(req.body.mrp || 0),
+      ptr: Number(req.body.ptr || 0),
+      salePrice: Number(req.body.salePrice || 0),
+      ptrTablet: Number(req.body.ptrTablet || 0),
+      saleTablet: Number(req.body.saleTablet || 0),
+      packing: String(req.body.packing || ""),
+      gst: Number(req.body.gst || 0),
+      type: String(req.body.type || ""),
+      hsn: String(req.body.hsn || ""),
+      batchNo: String(req.body.batchNo || ""),
+      expiry: String(req.body.expiry || ""),
+      stock: Number(req.body.stock || 0),
+      isActive: true,
+      updatedAt: new Date()
+    };
+
+    // 🟢 CREATE NEW
+    if (snapshot.empty) {
+
+      const doc = await db.collection("products").add({
+        ...productData,
+        createdAt: new Date()
+      });
+
+      return res.json({
+        message: "Product created",
+        id: doc.id,
+        action: "created"
+      });
+    }
+
+    // 🔄 UPDATE EXISTING
+    const existingDoc = snapshot.docs[0];
+    await existingDoc.ref.update(productData);
+
+    return res.json({
+      message: "Product updated",
+      id: existingDoc.id,
+      action: "updated"
+    });
+
+  } catch (err) {
+    console.error("ADD/UPDATE PRODUCT ERROR:", err);
+    res.status(500).json({ message: err.message });
   }
+});
 
-  const { isActive } = req.body;
 
-  await db.collection("products")
-    .doc(req.params.id)
-    .update({ isActive });
+/* ================= TOGGLE STATUS ================= */
 
-  res.json({ message: "Status updated" });
+router.patch("/:id/status", verifyAuth, async (req, res) => {
+  try {
+    const ref = db.collection("products").doc(req.params.id);
+    const doc = await ref.get();
+
+    if (!doc.exists)
+      return res.status(404).json({ message: "Not found" });
+
+    await ref.update({
+      isActive: !doc.data().isActive
+    });
+
+    res.json({ message: "Updated" });
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+/* ================= PRODUCT PDF ================= */
+
+router.get("/:id/pdf", verifyAuth, async (req, res) => {
+  try {
+
+    const docSnap = await db.collection("products")
+      .doc(req.params.id)
+      .get();
+
+    if (!docSnap.exists)
+      return res.status(404).json({ message: "Not found" });
+
+    const p = docSnap.data();
+
+    const pdf = new PDFDocument({ margin: 50 });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=product-${p.name}.pdf`
+    );
+
+    pdf.pipe(res);
+
+    pdf.fontSize(18).text("SHIVA BALAJI MEDICAL", { align: "center" });
+    pdf.moveDown(2);
+
+    pdf.fontSize(12);
+    pdf.text(`Product Name: ${p.name}`);
+    pdf.text(`MRP: ₹ ${p.mrp}`);
+    pdf.text(`PTR: ₹ ${p.ptr}`);
+    pdf.text(`Sale Price: ₹ ${p.salePrice}`);
+    pdf.text(`PTR Tablet: ₹ ${p.ptrTablet}`);
+    pdf.text(`Sale Tablet: ₹ ${p.saleTablet}`);
+    pdf.text(`Packing: ${p.packing}`);
+    pdf.text(`GST: ${p.gst}%`);
+    pdf.text(`Type: ${p.type}`);
+    pdf.text(`HSN: ${p.hsn}`);
+    pdf.text(`Batch No: ${p.batchNo}`);
+    pdf.text(`Expiry: ${p.expiry}`);
+    pdf.text(`Stock: ${p.stock}`);
+
+    pdf.end();
+
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
 module.exports = router;
