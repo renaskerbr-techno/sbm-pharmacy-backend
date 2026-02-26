@@ -3,11 +3,12 @@ const verifyAuth = require("../middleware/auth");
 const { db } = require("../firebase");
 const PDFDocument = require("pdfkit");
 
+
 const router = express.Router();
 
 /* ================= GET ALL PRODUCTS ================= */
 
-router.get("/", verifyAuth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
     const snapshot = await db.collection("products")
       .orderBy("createdAt", "desc")
@@ -27,7 +28,7 @@ router.get("/", verifyAuth, async (req, res) => {
 
 /* ================= ADD PRODUCT ================= */
 
-router.post("/", verifyAuth, async (req, res) => {
+router.post("/", async (req, res) => {
   try {
 
     const productName = req.body.name?.trim();
@@ -93,7 +94,7 @@ router.post("/", verifyAuth, async (req, res) => {
 
 /* ================= TOGGLE STATUS ================= */
 
-router.patch("/:id/status", verifyAuth, async (req, res) => {
+router.patch("/:id/status", async (req, res) => {
   try {
     const ref = db.collection("products").doc(req.params.id);
     const doc = await ref.get();
@@ -160,5 +161,38 @@ router.get("/:id/pdf", verifyAuth, async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
+/* ================= TOGGLE PRODUCT STATUS ================= */
 
+router.patch("/:id/status", async (req, res) => {
+  try {
+    const productRef = db.collection("products").doc(req.params.id);
+    const doc = await productRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    const currentStatus = doc.data().isActive ?? true;
+
+    await productRef.update({
+      isActive: !currentStatus
+    });
+
+    res.json({ message: "Status updated successfully" });
+
+  } catch (error) {
+    console.error("Status toggle error:", error);
+    res.status(500).json({ message: error.message });
+  }
+});
+
+/* ==================================Delete=============================*/
+router.delete("/:id", async (req, res) => {
+  try {
+    await db.collection("products").doc(req.params.id).delete();
+    res.json({ message: "Product deleted" });
+  } catch (error) {
+    res.status(500).json({ error: "Delete failed" });
+  }
+});
 module.exports = router;

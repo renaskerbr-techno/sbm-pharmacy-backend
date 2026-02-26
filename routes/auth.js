@@ -6,29 +6,81 @@ const { db } = require("../firebase");
 const router = express.Router();
 
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
 
-  const snapshot = await db.collection("users")
-    .where("email", "==", email)
-    .get();
+  try {
 
-  if (snapshot.empty)
-    return res.status(400).json({ message: "Invalid Credentials" });
+    const { email, password } = req.body;
 
-  const userDoc = snapshot.docs[0];
-  const userData = userDoc.data();
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password required"
+      });
+    }
 
-  const valid = await bcrypt.compare(password, userData.password);
-  if (!valid)
-    return res.status(400).json({ message: "Invalid Credentials" });
+    console.log("Login attempt:", email);
 
-  const token = jwt.sign(
-    { uid: userDoc.id, role: userData.role },
-    "MY_SECRET_KEY",
-    { expiresIn: "1d" }
-  );
+    const snapshot = await db
+      .collection("users")
+      .where("email", "==", email)
+      .get();
 
-  res.json({ token, role: userData.role });
+    if (snapshot.empty) {
+
+      console.log("User not found");
+
+      return res.status(400).json({
+        message: "Invalid Credentials"
+      });
+
+    }
+
+    const userDoc = snapshot.docs[0];
+    const userData = userDoc.data();
+
+    console.log("User found");
+
+    const validPassword = await bcrypt.compare(
+      password,
+      userData.password
+    );
+
+    if (!validPassword) {
+
+      console.log("Wrong password");
+
+      return res.status(400).json({
+        message: "Invalid Credentials"
+      });
+
+    }
+
+    const token = jwt.sign(
+      {
+        uid: userDoc.id,
+        role: userData.role
+      },
+      "MY_SECRET_KEY",
+      { expiresIn: "1d" }
+    );
+
+    console.log("Login success");
+
+    res.json({
+      token,
+      role: userData.role
+    });
+
+  }
+  catch (error) {
+
+    console.error("Login error:", error);
+
+    res.status(500).json({
+      message: error.message
+    });
+
+  }
+
 });
 
 module.exports = router;

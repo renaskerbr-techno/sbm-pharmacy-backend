@@ -1,61 +1,34 @@
 const express = require("express");
-const verifyAuth = require("../middleware/auth");
-const { db } = require("../firebase");
-const PDFDocument = require("pdfkit");
-const path = require("path");
-
 const router = express.Router();
+const { db, admin } = require("../firebase");
 
-/* ================= CREATE BILL ================= */
+/* ================= GET ALL BILLS ================= */
 
-router.post("/", verifyAuth, async (req, res) => {
+router.get("/", async (req, res) => {
   try {
-    const { items, total, paymentMethod, customerMobile } = req.body;
+    const { search } = req.query;
 
-    const billNo = "BILL" + Date.now();
+    let queryRef = db.collection("bills");
 
-    // 🔥 STOCK DEDUCTION
-    for (let item of items) {
+    if (search) {
+      // Search by Bill No OR Mobile
+      const snapshot = await queryRef.get();
 
-      const ref = db.collection("products").doc(item.productId);
-      const product = await ref.get();
+      const filtered = snapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        }))
+        .filter(bill =>
+          bill.billNo?.toLowerCase().includes(search.toLowerCase()) ||
+          bill.customerMobile?.includes(search)
+        );
 
-      if (!product.exists)
-        return res.status(404).json({ message: "Product not found" });
-
-      const currentStock = product.data().stock || 0;
-
-      if (currentStock < item.qty)
-        return res.status(400).json({ message: "Insufficient stock" });
-
-      await ref.update({
-        stock: currentStock - Number(item.qty)
-      });
+      return res.json(filtered);
     }
 
-    // 🔥 SAVE BILL
-    await db.collection("bills").add({
-      billNo,
-      items,
-      total: Number(total),
-      paymentMethod,
-      customerMobile,
-      createdAt: new Date()
-    });
-
-    res.json({ message: "Bill created", billNo });
-
-  } catch (err) {
-    console.error("CREATE BILL ERROR:", err);
-    res.status(500).json({ message: err.message });
-  }
-});
-
-/* ================= GET BILLS ================= */
-
-router.get("/", verifyAuth, async (req, res) => {
-  try {
-    const snapshot = await db.collection("bills")
+    // Default load all
+    const snapshot = await queryRef
       .orderBy("createdAt", "desc")
       .get();
 
@@ -66,130 +39,110 @@ router.get("/", verifyAuth, async (req, res) => {
 
     res.json(bills);
 
-  } catch (err) {
-    res.status(500).json({ message: err.message });
+  } catch (error) {
+    console.error("GET BILLS ERROR:", error);
+    res.status(500).json({ error: error.message });
   }
 });
+/* ================= CALCULATION ================= */
 
-/* ================= PROFESSIONAL GST A4 PDF ================= */
+const calculateItemTotal = (item) => {
+  const packSize = Number(item.packSize || 0);
+  const unitCost = Number(item.unitCost || 0);
+  const quantity = Number(item.quantity || 0);
 
-router.get("/:id/pdf", verifyAuth, async (req, res) => {
+  if (item.hsnCode === "3004") {
+    if (item.mode === "Pack") {
+      return packSize * unitCost * quantity;
+    }
+    return unitCost * quantity;
+  }
 
+  return unitCost * quantity;
+};
+
+/* ================= CREATE BILL ================= */
+
+router.post("/", async (req, res) => {
   try {
 
-    const billDoc = await db.collection("bills")
-      .doc(req.params.id)
-      .get();
+    const { items, customerMobile, paymentMethod } = req.body;
 
-    if (!billDoc.exists)
-      return res.status(404).json({ message: "Bill not found" });
+    if (!items || items.length === 0)
+      return res.status(400).json({ error: "No items added" });
 
-    const bill = billDoc.data();
+    let grandTotal = 0;
 
-    const doc = new PDFDocument({ size: "A4", margin: 50 });
+    const processedItems = items.map(item => {
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename=invoice-${bill.billNo}.pdf`
-    );
+      const cleanItem = {
+        productId: item.productId || "",
+        productName: item.productName || "",
+        hsnCode: item.hsnCode || "",
+        packSize: Number(item.packSize || 0),
+        unitCost: Number(item.unitCost || 0),
+        quantity: Number(item.quantity || 0),
+        mode: item.mode || "Loose"
+      };
 
-    doc.pipe(res);
+      const total = calculateItemTotal(cleanItem);
+      grandTotal += total;
 
-    /* ===== LOGO ===== */
-    const logoPath = path.join(__dirname, "../logo.png");
-    doc.image(logoPath, 50, 30, { width: 80 });
-
-    doc.moveDown(3);
-
-    /* ===== HEADER ===== */
-    doc.fontSize(20).text("SHIVA BALAJI MEDICAL", { align: "center" });
-    doc.fontSize(12).text("GSTIN: XXXXXXXX", { align: "center" });
-    doc.moveDown(2);
-
-    doc.fontSize(12).text(`Invoice No: ${bill.billNo}`);
-    doc.text(`Date: ${new Date(bill.createdAt).toLocaleString()}`);
-    doc.text(`Customer Mobile: ${bill.customerMobile || "-"}`);
-    doc.text(`Payment Method: ${bill.paymentMethod}`);
-    doc.moveDown();
-
-    doc.text("------------------------------------------------------------");
-
-    /* ===== ITEMS ===== */
-    bill.items.forEach((item, index) => {
-
-      doc.fontSize(12).text(`${index + 1}. ${item.productName}`);
-      doc.text(`HSN: ${item.hsn || "-"}`);
-      doc.text(`Batch: ${item.batchNo || "-"}`);
-      doc.text(`Expiry: ${item.expiry || "-"}`);
-
-      doc.text(
-        `Qty: ${item.qty}  |  Price: ₹ ${item.price}  |  Total: ₹ ${item.price * item.qty}`
-      );
-
-      doc.moveDown();
+      return {
+        ...cleanItem,
+        total
+      };
     });
 
-    doc.text("------------------------------------------------------------");
+    const billNo = "BILL" + Date.now();
 
-    /* ===== TOTAL ===== */
-    doc.moveDown();
-    doc.fontSize(14).text(
-      `Grand Total: ₹ ${Number(bill.total).toFixed(2)}`,
-      { align: "right" }
-    );
+    const billRef = await db.collection("bills").add({
+      billNo,
+      items: processedItems,
+      customerMobile: customerMobile || "",
+      paymentMethod: paymentMethod || "Cash",
+      total: grandTotal,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
 
-    doc.moveDown(3);
+    /* ================= STOCK REDUCTION ================= */
 
-    /* ===== FOOTER ===== */
-    doc.fontSize(12).text("Thank You! Visit Again.", { align: "center" });
-    doc.text("This is a computer generated invoice.", { align: "center" });
+    const batch = db.batch();
 
-    doc.end();
+    processedItems.forEach(item => {
 
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-/* ================= DELETE BILL WITH ROLLBACK ================= */
-
-router.delete("/:id", verifyAuth, async (req, res) => {
-  try {
-
-    const billRef = db.collection("bills").doc(req.params.id);
-    const billSnap = await billRef.get();
-
-    if (!billSnap.exists) {
-      return res.status(404).json({ message: "Bill not found" });
-    }
-
-    const bill = billSnap.data();
-
-    // 🔁 RESTORE STOCK USING productId (SAFE)
-    for (let item of bill.items) {
+      if (!item.productId) return;
 
       const productRef = db.collection("products").doc(item.productId);
-      const productSnap = await productRef.get();
 
-      if (productSnap.exists) {
+      let stockReduce = 0;
 
-        const currentStock = productSnap.data().stock || 0;
-
-        await productRef.update({
-          stock: currentStock + Number(item.qty)
-        });
+      if (item.hsnCode === "3004") {
+        if (item.mode === "Pack") {
+          stockReduce = item.packSize * item.quantity;
+        } else {
+          stockReduce = item.quantity;
+        }
+      } else {
+        stockReduce = item.quantity;
       }
-    }
 
-    // 🗑 DELETE BILL
-    await billRef.delete();
+      batch.update(productRef, {
+        stock: admin.firestore.FieldValue.increment(-stockReduce)
+      });
+    });
 
-    res.json({ message: "Bill deleted & stock restored" });
+    await batch.commit();
+
+    res.status(201).json({
+      id: billRef.id,
+      billNo,
+      total: grandTotal
+    });
 
   } catch (err) {
-    console.error("DELETE BILL ERROR:", err);
-    res.status(500).json({ message: err.message });
+    console.error("🔥 BILL ERROR:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 

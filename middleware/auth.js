@@ -1,17 +1,22 @@
-const jwt = require("jsonwebtoken");
+const { admin } = require("../firebase");
 
-module.exports = (req, res, next) => {
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) return res.status(401).json({ message: "No token" });
-
-  const token = authHeader.split(" ")[1];
-
+module.exports = async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, "MY_SECRET_KEY");
-    req.user = decoded;
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ message: "No token provided" });
+    }
+
+    const token = authHeader.split("Bearer ")[1];
+
+    const decodedToken = await admin.auth().verifyIdToken(token);
+
+    req.user = decodedToken;
+
     next();
-  } catch (err) {
-    return res.status(401).json({ message: "Invalid token" });
+  } catch (error) {
+    console.error("AUTH ERROR:", error);
+    return res.status(401).json({ message: "Invalid or expired token" });
   }
 };
